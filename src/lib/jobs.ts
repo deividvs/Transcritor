@@ -8,6 +8,7 @@ export const DATA_DIR = path.join(process.cwd(), 'downloads')
 export type { Stage, Segment, JobOptions, Job } from './types'
 export { STAGE_LABEL, DEFAULT_OPTIONS } from './types'
 
+import { CAN_WRITE_DISK } from './mode'
 import type { Job, JobOptions } from './types'
 
 type Store = {
@@ -39,6 +40,7 @@ export function emitterFor(id: string) {
 }
 
 function persist(job: Job) {
+  if (!CAN_WRITE_DISK) return
   try {
     fs.mkdirSync(jobDir(job.id), { recursive: true })
     fs.writeFileSync(path.join(jobDir(job.id), 'job.json'), JSON.stringify(job, null, 2))
@@ -51,7 +53,7 @@ function persist(job: Job) {
 function loadFromDisk() {
   if (store.loaded) return
   store.loaded = true
-  if (!fs.existsSync(DATA_DIR)) return
+  if (!CAN_WRITE_DISK || !fs.existsSync(DATA_DIR)) return
 
   for (const entry of fs.readdirSync(DATA_DIR)) {
     const file = path.join(DATA_DIR, entry, 'job.json')
@@ -117,6 +119,7 @@ export function updateJob(id: string, patch: Partial<Job>, save = false) {
 export function deleteJob(id: string) {
   store.jobs.delete(id)
   store.emitters.delete(id)
+  if (!CAN_WRITE_DISK) return
   try {
     fs.rmSync(jobDir(id), { recursive: true, force: true })
   } catch {

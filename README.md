@@ -1,8 +1,12 @@
 # Transcritor
 
-App web local que recebe o link de um vídeo do **YouTube** ou **Instagram**, baixa a mídia,
+App web que recebe o link de um vídeo do **YouTube** ou **Instagram**, baixa a mídia,
 converte o áudio para **MP3** e gera a **transcrição em texto** — tudo na sua máquina.
 Nenhum áudio sai do computador e não há custo por transcrição.
+
+Publicado numa URL (serverless), o app cai automaticamente no **modo nuvem**: transcreve pela
+API da Groq, aceita upload de arquivo ou link direto de mídia, e não aceita link de *página* do
+YouTube/Instagram. Veja [Dois modos](#dois-modos).
 
 ```
 link  →  yt-dlp  →  ffmpeg (MP3)  →  mlx-whisper (Metal/GPU)  →  txt · srt · vtt · json
@@ -83,6 +87,23 @@ downloads/<job-id>/
   linhas `[00:12.480 --> 00:15.200]` do mlx-whisper.
 - **`/api/jobs/[id]/events`** — SSE. O cliente abre um `EventSource` por job em andamento e o
   servidor fecha o stream sozinho quando o job termina.
+
+## Dois modos
+
+O modo é escolhido sozinho, pela presença dos binários — não há configuração.
+
+| | **local** | **nuvem** |
+|---|---|---|
+| Transcrição | `mlx_whisper` (GPU Metal) | API da Groq — `whisper-large-v3-turbo` |
+| Entrada | link do YouTube / Instagram | arquivo até 4 MB, ou link direto de mídia |
+| Custo | zero | ~US$ 0,04 por hora de áudio |
+| Privacidade | nada sai da máquina | o áudio vai para a Groq |
+
+Para publicar, defina `GROQ_API_KEY` (pegue em [console.groq.com](https://console.groq.com/keys))
+nas variáveis de ambiente do projeto. Sem ela o site sobe, mas avisa que não consegue transcrever.
+
+Link de *página* do YouTube não funciona no modo nuvem: extrair a mídia exige o `yt-dlp`, que é
+Python e não roda em serverless. Use o modo local para esses links — lá é offline e gratuito.
 
 ## Limitações
 

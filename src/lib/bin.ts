@@ -22,9 +22,11 @@ function resolveBin(name: string, envVar: string): string | null {
   const override = process.env[envVar]
   if (override && existsSync(override)) return override
 
+  // Os caminhos vivem fora do projeto (~/.local/bin, /usr/bin…). Sem o ignore,
+  // o tracer do Turbopack conclui que precisa empacotar o projeto inteiro.
   for (const dir of EXTRA_PATHS) {
-    const candidate = path.join(dir, name)
-    if (existsSync(candidate)) return candidate
+    const candidate = path.join(/* turbopackIgnore: true */ dir, name)
+    if (existsSync(/* turbopackIgnore: true */ candidate)) return candidate
   }
 
   try {

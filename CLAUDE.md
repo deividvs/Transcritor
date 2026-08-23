@@ -23,8 +23,13 @@ Duas escolhas do usuário definiram o resto:
 2. **Transcrição: Whisper local** em vez de API (Groq / Replicate) — grátis, offline, sem
    API key, áudio nunca sai da máquina.
 
-Consequência importante: **não dá para hospedar em serverless (Vercel)**. O app depende de
-processos externos e de disco persistente. É local por projeto, não por limitação temporária.
+Consequência importante: **o pipeline local não roda em serverless**. Ele depende de processos
+externos e de disco persistente.
+
+> **Revisto em 2026-08-23.** O app ganhou um segundo modo para poder ser publicado numa URL.
+> A decisão original continua valendo **na máquina**: rodando local, é Whisper offline, custo
+> zero, nada sai do computador. O modo nuvem só entra onde os binários não existem. Veja
+> "Dois modos de execução".
 
 ## Diagnóstico do ambiente (antes)
 
@@ -88,6 +93,35 @@ npx create-next-app@latest transcritor \
 
 Resultado: **Next 16.3.2**, React 19.2.8, Tailwind 4, TypeScript.
 
+## Dois modos de execução
+
+A escolha é automática, sem configuração: se `yt-dlp`, `ffmpeg` e `mlx_whisper` existem, é
+local. Em serverless (`process.env.VERCEL`) é sempre nuvem.
+
+| | **local** | **nuvem** |
+|---|---|---|
+| Onde roda | sua máquina | Vercel (serverless) |
+| Transcrição | `mlx_whisper` na GPU Metal | API da Groq (`whisper-large-v3-turbo`) |
+| Entrada | link do YouTube / Instagram | arquivo enviado (≤ 4 MB) ou **link direto** de mídia |
+| Custo | zero | ~US$ 0,04 por hora de áudio |
+| Privacidade | nada sai da máquina | o áudio vai para a Groq |
+| Progresso | SSE, etapa a etapa | síncrono — o job volta pronto |
+| Arquivos | txt/srt/vtt/json em disco | gerados no navegador a partir dos segmentos |
+
+**Por que a nuvem não aceita link do YouTube.** Extrair a mídia de uma *página* exige o
+`yt-dlp`, que é Python e não roda em serverless — e o YouTube ainda bloqueia IP de datacenter.
+A Groq baixa apenas URLs que apontam direto para um arquivo de áudio/vídeo. Para links de
+página, use o modo local.
+
+**Por que a transcrição na nuvem é síncrona.** No serverless a função pode congelar assim que
+responde, então o padrão fire-and-forget + SSE do modo local não é confiável. A rota transcreve
+dentro do próprio request e devolve o job já em `done`. Como `done` é terminal, a UI não abre
+`EventSource` — a mesma tela serve aos dois modos sem ramificação.
+
+**Limite de 4 MB no upload.** É a restrição de corpo de request das funções da Vercel (4,5 MB),
+não da Groq (que aceita 25 MB no free). Por link direto não há esse limite, porque o arquivo
+nunca passa pela nossa função — a Groq busca sozinha.
+
 ## Arquitetura
 
 | Arquivo | Responsabilidade |
@@ -97,8 +131,11 @@ Resultado: **Next 16.3.2**, React 19.2.8, Tailwind 4, TypeScript.
 | `src/lib/jobs.ts` | Store de jobs em memória + espelho em disco (`job.json`). Um `EventEmitter` por job. |
 | `src/lib/pipeline.ts` | As 4 etapas: metadata → download → convert → transcribe. |
 | `src/lib/format.ts` | Formatação de duração, timestamp e tempo relativo. |
-| `src/app/api/health/route.ts` | Diz quais binários estão faltando (a UI mostra um aviso no topo). |
-| `src/app/api/jobs/route.ts` | `GET` lista, `POST` cria e dispara o pipeline. |
+| `src/lib/mode.ts` | Decide local vs nuvem, expõe o limite de upload e trava a escrita em disco no serverless. |
+| `src/lib/cloud.ts` | Chamada à API da Groq (`file` ou `url`) e tradução dos erros dela. |
+| `src/lib/subtitles.ts` | Monta txt/srt/vtt/json no navegador quando não há disco. |
+| `src/app/api/health/route.ts` | Diz o modo ativo, quais binários faltam e se há `GROQ_API_KEY`. |
+| `src/app/api/jobs/route.ts` | `GET` lista. `POST` ramifica: pipeline local (assíncrono) ou Groq (síncrono, aceita multipart). |
 | `src/app/api/jobs/[id]/route.ts` | `GET` um job, `DELETE` remove job + pasta. |
 | `src/app/api/jobs/[id]/events/route.ts` | **SSE** — stream de progresso. |
 | `src/app/api/jobs/[id]/file/route.ts` | Download dos artefatos com nome amigável. |
@@ -230,7 +267,7 @@ downloads/<job-id>/
 
 - **Apple Silicon apenas.** O `mlx-whisper` depende do MLX. Em Intel ou Linux, trocar por
   `faster-whisper` — só a função `stepTranscribe` muda.
-- **Não roda em serverless.** Depende de processos externos e disco.
+- **O pipeline local não roda em serverless.** Depende de processos externos e disco. Publicado, o app cai no modo nuvem — sem link de página do YouTube/Instagram e com upload limitado a 4 MB.
 - **Um job por vez, na prática.** Nada impede disparar vários, mas eles disputam a mesma GPU.
 - **Instagram muda as proteções com frequência.** Posts e reels públicos funcionam sem login;
   se um dia parar, o conserto quase sempre é `uv tool upgrade yt-dlp`. Conteúdo privado e
@@ -252,6 +289,15 @@ teste apareceu a ausência de `duration` no metadado; adicionada a função `pro
 `src/lib/pipeline.ts`, chamada entre o download e a conversão quando o extrator não informa a
 duração. Verificado separadamente que a sonda lê `Duration:` corretamente e que o
 `-progress pipe:1` do ffmpeg emite `out_time_us` em incrementos reais num arquivo de 20 min.
+
+**2026-08-23 — modo nuvem e publicação na Vercel.** O app passou a ter dois modos, escolhidos
+automaticamente. O modo local ficou intacto. Adicionados `src/lib/mode.ts`, `src/lib/cloud.ts` e
+`src/lib/subtitles.ts`; `jobs.ts` deixou de tocar o disco quando `process.env.VERCEL` está
+definido; `page.tsx` e `job-card.tsx` se adaptam ao modo (upload de arquivo, downloads gerados no
+navegador). Corrigido também um aviso do Turbopack: a busca de binários em `bin.ts` disparava
+"dynamic filesystem access" e fazia o tracer empacotar o projeto inteiro — resolvido com
+`/* turbopackIgnore: true */`, já que os caminhos ficam fora do projeto. Repositório próprio criado
+e publicado em github.com/deividvs/Transcritor.
 
 ## Aviso
 

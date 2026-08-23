@@ -3,6 +3,7 @@
 import { useState } from 'react'
 
 import { formatDuration, formatRelative, formatTimestamp } from '@/lib/format'
+import { buildFile, slug } from '@/lib/subtitles'
 import { STAGE_LABEL, type Job } from '@/lib/types'
 
 const DOWNLOADS = [
@@ -25,7 +26,25 @@ export default function JobCard({ job, onDelete }: { job: Job; onDelete: (id: st
   const [copied, setCopied] = useState(false)
 
   const running = job.stage !== 'done' && job.stage !== 'error'
-  const available = DOWNLOADS.filter((d) => job.files[d.kind])
+
+  // Modo local: os arquivos existem em disco e vêm da API. Modo nuvem: não há
+  // disco, então txt/srt/vtt/json são montados aqui a partir dos segmentos.
+  const onDisk = DOWNLOADS.filter((d) => job.files[d.kind])
+  const generated =
+    onDisk.length === 0 && job.segments.length > 0
+      ? DOWNLOADS.filter((d) => ['txt', 'srt', 'vtt', 'json'].includes(d.kind))
+      : []
+
+  function download(kind: string) {
+    const built = buildFile(job, kind)
+    if (!built) return
+    const url = URL.createObjectURL(new Blob([built.content], { type: built.mime }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${slug(job.title ?? job.id)}.${built.ext}`
+    link.click()
+    URL.revokeObjectURL(url)
+  }
 
   async function copy() {
     const text = withTimes
@@ -95,9 +114,9 @@ export default function JobCard({ job, onDelete }: { job: Job; onDelete: (id: st
             </p>
           ) : null}
 
-          {available.length > 0 ? (
+          {onDisk.length > 0 || generated.length > 0 ? (
             <div className="mt-3 flex flex-wrap gap-2">
-              {available.map((d) => (
+              {onDisk.map((d) => (
                 <a
                   key={d.kind}
                   href={`/api/jobs/${job.id}/file?kind=${d.kind}`}
@@ -105,6 +124,15 @@ export default function JobCard({ job, onDelete }: { job: Job; onDelete: (id: st
                 >
                   ↓ {d.label}
                 </a>
+              ))}
+              {generated.map((d) => (
+                <button
+                  key={d.kind}
+                  onClick={() => download(d.kind)}
+                  className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-sky-500/40 hover:text-sky-300"
+                >
+                  ↓ {d.label}
+                </button>
               ))}
             </div>
           ) : null}

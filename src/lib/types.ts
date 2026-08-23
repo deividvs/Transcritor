@@ -46,6 +46,18 @@ export const MODELS = [
   { value: 'mlx-community/whisper-tiny-mlx', label: 'Tiny — teste rápido (~75 MB)' },
 ]
 
+/** Modelos da Groq, usados quando não há stack local (modo nuvem). */
+export const CLOUD_MODELS = [
+  { value: 'whisper-large-v3-turbo', label: 'Large v3 Turbo — rápido e barato ($0,04/h)' },
+  { value: 'whisper-large-v3', label: 'Large v3 — mais preciso ($0,111/h)' },
+]
+
+export const DEFAULT_CLOUD_MODEL = CLOUD_MODELS[0].value
+
+export function modelsFor(mode: 'local' | 'cloud') {
+  return mode === 'cloud' ? CLOUD_MODELS : MODELS
+}
+
 export const LANGUAGES = [
   { value: 'pt', label: 'Português' },
   { value: '', label: 'Detectar automaticamente' },
@@ -70,6 +82,8 @@ export type Job = {
   duration?: number
   thumbnail?: string
   extractor?: string
+  /** Onde a transcrição rodou. Ausente em jobs antigos, gravados antes do modo nuvem. */
+  mode?: 'local' | 'cloud'
   detectedLanguage?: string
   files: Record<string, string>
   segments: Segment[]
