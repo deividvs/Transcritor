@@ -4,6 +4,7 @@ import path from 'node:path'
 
 import { childEnv, requireBin } from './bin'
 import { type Job, type Segment, jobDir, updateJob } from './jobs'
+import { toSrt, toVtt } from './subtitles'
 
 type LineHandler = (line: string) => void
 
@@ -61,6 +62,14 @@ const SPAN = { metadata: [0, 5], download: [5, 40], convert: [40, 50], transcrib
 const FILE_SPAN = { convert: [0, 15], transcribe: [15, 100] }
 
 type Spans = { convert: number[]; transcribe: number[] }
+
+/**
+ * Áudio longo derruba o mlx_whisper numa máquina de 8 GB: ele carrega o áudio
+ * inteiro e, num arquivo de horas, o processo morre sem escrever nada. Acima do
+ * limiar transcrevemos em fatias e costuramos o resultado, deslocando os tempos.
+ */
+const CHUNK_THRESHOLD_SECONDS = 30 * 60
+const CHUNK_SECONDS = 10 * 60
 
 function scale(span: number[], pct: number) {
   return clamp(span[0] + (pct / 100) * (span[1] - span[0]))
@@ -234,23 +243,31 @@ async function stepConvert(job: Job, input: string, spans: Spans = SPAN) {
   return output
 }
 
-async function stepTranscribe(job: Job, mp3: string, spans: Spans = SPAN) {
-  const whisper = requireBin('whisper')
-  const dir = jobDir(job.id)
-  const total = job.duration ?? 0
-  const segments: Segment[] = []
+const EMPTY_RESULT =
+  'A transcrição terminou sem gerar texto. Com áudio longo isso normalmente é falta de ' +
+  'memória: tente de novo com um modelo menor (Small ou Tiny) nas opções.'
 
-  updateJob(job.id, {
-    stage: 'transcribing',
-    progress: spans.transcribe[0],
-    message: 'Carregando o modelo Whisper…',
-  }, true)
+/**
+ * Roda o mlx_whisper num arquivo. Os segmentos saem do stdout (`--verbose`), que
+ * também alimenta o progresso. `offset` desloca os tempos quando o arquivo é uma
+ * fatia de um áudio maior.
+ */
+async function whisperOn(
+  job: Job,
+  file: string,
+  outDir: string,
+  outName: string,
+  offset: number,
+  onSegment: (segment: Segment) => void,
+  onMessage: (text: string) => void,
+) {
+  const whisper = requireBin('whisper')
 
   const args = [
-    mp3,
+    file,
     '--model', job.options.model,
-    '--output-dir', dir,
-    '--output-name', 'audio',
+    '--output-dir', outDir,
+    '--output-name', outName,
     '--output-format', 'all',
     '--verbose', 'True',
   ]
@@ -262,7 +279,7 @@ async function stepTranscribe(job: Job, mp3: string, spans: Spans = SPAN) {
       // e só confere o cache do HuggingFace nas seguintes.
       const fetching = line.match(/Fetching \d+ files:\s+(\d+)%/)
       if (fetching) {
-        updateJob(job.id, { message: `Preparando o modelo Whisper… ${fetching[1]}%` })
+        onMessage(`Preparando o modelo Whisper… ${fetching[1]}%`)
         return
       }
 
@@ -275,14 +292,78 @@ async function stepTranscribe(job: Job, mp3: string, spans: Spans = SPAN) {
       const seg = line.match(/^\[([\d:.]+)\s*-->\s*([\d:.]+)\]\s*(.*)$/)
       if (!seg) return
 
-      segments.push({
-        start: parseTimestamp(seg[1]),
-        end: parseTimestamp(seg[2]),
+      onSegment({
+        start: parseTimestamp(seg[1]) + offset,
+        end: parseTimestamp(seg[2]) + offset,
         text: seg[3].trim(),
       })
+    },
+  })
 
-      const last = segments[segments.length - 1]
-      const pct = total > 0 ? clamp((last.end / total) * 100) : Math.min(95, segments.length * 2)
+  return code
+}
+
+/** Corta o MP3 em pedaços sem recodificar (`-c copy`), então é quase instantâneo. */
+async function splitAudio(mp3: string, dir: string) {
+  fs.mkdirSync(dir, { recursive: true })
+
+  const { code } = await run(requireBin('ffmpeg'), [
+    '-hide_banner', '-nostdin', '-y',
+    '-i', mp3,
+    '-f', 'segment',
+    '-segment_time', String(CHUNK_SECONDS),
+    '-c', 'copy',
+    path.join(dir, 'parte_%03d.mp3'),
+  ])
+
+  if (code !== 0) throw new Error('Não consegui fatiar o áudio para transcrever por partes.')
+
+  const parts = fs
+    .readdirSync(dir)
+    .filter((f) => f.startsWith('parte_') && f.endsWith('.mp3'))
+    .sort()
+    .map((f) => path.join(dir, f))
+
+  if (parts.length === 0) throw new Error('O fatiamento do áudio não gerou nenhuma parte.')
+  return parts
+}
+
+/**
+ * No modo fatiado somos nós que escrevemos os artefatos, porque cada parte gera
+ * os seus e eles precisam ser costurados com os tempos já deslocados.
+ */
+function writeArtifacts(job: Job, segments: Segment[]) {
+  const dir = jobDir(job.id)
+  const transcript = segments.map((s) => s.text).join(' ').trim()
+
+  fs.writeFileSync(path.join(dir, 'audio.txt'), `${transcript}\n`)
+  fs.writeFileSync(path.join(dir, 'audio.srt'), toSrt(segments))
+  fs.writeFileSync(path.join(dir, 'audio.vtt'), toVtt(segments))
+  fs.writeFileSync(
+    path.join(dir, 'audio.json'),
+    JSON.stringify({ text: transcript, duration: job.duration, segments }, null, 2),
+  )
+
+  const files = { ...job.files }
+  for (const ext of ['txt', 'srt', 'vtt', 'json']) files[ext] = `audio.${ext}`
+
+  updateJob(job.id, { files, transcript, segments }, true)
+}
+
+async function transcribeWhole(job: Job, mp3: string, spans: Spans, total: number) {
+  const dir = jobDir(job.id)
+  const segments: Segment[] = []
+
+  updateJob(job.id, {
+    stage: 'transcribing',
+    progress: spans.transcribe[0],
+    message: 'Carregando o modelo Whisper…',
+  }, true)
+
+  const code = await whisperOn(job, mp3, dir, 'audio', 0,
+    (segment) => {
+      segments.push(segment)
+      const pct = total > 0 ? clamp((segment.end / total) * 100) : Math.min(95, segments.length * 2)
       updateJob(job.id, {
         segments: [...segments],
         transcript: segments.map((s) => s.text).join(' '),
@@ -290,7 +371,8 @@ async function stepTranscribe(job: Job, mp3: string, spans: Spans = SPAN) {
         message: `Transcrevendo… ${pct.toFixed(0)}%`,
       })
     },
-  })
+    (text) => updateJob(job.id, { message: text }),
+  )
 
   if (code !== 0) throw new Error('A transcrição falhou. Veja o terminal do servidor para detalhes.')
 
@@ -302,9 +384,62 @@ async function stepTranscribe(job: Job, mp3: string, spans: Spans = SPAN) {
   const txtPath = path.join(dir, 'audio.txt')
   const transcript = fs.existsSync(txtPath)
     ? fs.readFileSync(txtPath, 'utf8').trim()
-    : job.transcript
+    : segments.map((s) => s.text).join(' ').trim()
+
+  // Sair com código 0 mas sem nada escrito acontece quando o processo é morto
+  // por memória. Antes isso virava um job "Concluído" e vazio.
+  if (!transcript && segments.length === 0) throw new Error(EMPTY_RESULT)
 
   updateJob(job.id, { files, transcript }, true)
+}
+
+async function transcribeChunked(job: Job, mp3: string, spans: Spans, total: number) {
+  const chunkDir = path.join(jobDir(job.id), 'partes')
+
+  updateJob(job.id, {
+    stage: 'transcribing',
+    progress: spans.transcribe[0],
+    message: 'Preparando o áudio em partes…',
+  }, true)
+
+  const parts = await splitAudio(mp3, chunkDir)
+  const all: Segment[] = []
+
+  for (const [index, part] of parts.entries()) {
+    const code = await whisperOn(job, part, chunkDir, `parte_${index}`, index * CHUNK_SECONDS,
+      (segment) => {
+        all.push(segment)
+        const pct = total > 0 ? clamp((segment.end / total) * 100) : 0
+        updateJob(job.id, {
+          segments: [...all],
+          transcript: all.map((s) => s.text).join(' '),
+          progress: scale(spans.transcribe, pct),
+          message: `Transcrevendo parte ${index + 1} de ${parts.length}… ${pct.toFixed(0)}%`,
+        })
+      },
+      (text) => updateJob(job.id, { message: `${text} (parte ${index + 1}/${parts.length})` }),
+    )
+
+    if (code !== 0) {
+      throw new Error(`A transcrição falhou na parte ${index + 1} de ${parts.length}. ${EMPTY_RESULT}`)
+    }
+  }
+
+  if (all.length === 0) throw new Error(EMPTY_RESULT)
+
+  writeArtifacts(job, all)
+  try { fs.rmSync(chunkDir, { recursive: true, force: true }) } catch { /* ignore */ }
+}
+
+/**
+ * Áudio curto vai inteiro; áudio longo vai fatiado, porque numa máquina de 8 GB
+ * o mlx_whisper morre em arquivos de horas.
+ */
+async function stepTranscribe(job: Job, mp3: string, spans: Spans = SPAN) {
+  const total = job.duration ?? 0
+  return total > CHUNK_THRESHOLD_SECONDS
+    ? transcribeChunked(job, mp3, spans, total)
+    : transcribeWhole(job, mp3, spans, total)
 }
 
 export async function runPipeline(job: Job) {

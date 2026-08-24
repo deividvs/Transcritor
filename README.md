@@ -88,6 +88,15 @@ downloads/<job-id>/
 - **`/api/jobs/[id]/events`** — SSE. O cliente abre um `EventSource` por job em andamento e o
   servidor fecha o stream sozinho quando o job termina.
 
+## Áudio longo
+
+Acima de 30 minutos o áudio é cortado em partes de 10 minutos e transcrito pedaço por pedaço, com
+os tempos costurados no fim. Isso existe porque numa máquina de 8 GB o Whisper morre tentando
+carregar um arquivo de várias horas de uma vez.
+
+Se ainda assim faltar memória, o app avisa e sugere trocar para um modelo menor — ele **não**
+finge que deu certo.
+
 ## Re-transcrever
 
 Todo job concluído guarda o MP3. No card dele há **↻ re-transcrever**: escolhe outro idioma ou

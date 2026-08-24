@@ -126,6 +126,17 @@ antes de gravar qualquer byte — não é limite técnico. Arquivo enviado pula 
 `runPipelineFromFile()` vai direto para conversão e transcrição, e por isso os pesos da barra são
 outros (`FILE_SPAN`: conversão 0–15%, transcrição 15–100%).
 
+**Áudio longo é transcrito em fatias.** Acima de 30 min o `audio.mp3` é cortado pelo ffmpeg em
+pedaços de 10 min (`-f segment -c copy`, sem recodificar, quase instantâneo) e cada parte vai ao
+mlx_whisper separadamente; os tempos de cada fatia são deslocados por `índice × 600 s` na leitura
+do stdout. Motivo: numa máquina de 8 GB o mlx_whisper carrega o áudio inteiro e **morre em
+arquivos de horas** — saindo com código 0 e sem escrever nada. No modo fatiado somos nós que
+escrevemos `audio.txt/srt/vtt/json`, porque cada parte gera os seus e eles precisam ser costurados.
+
+**Nunca concluir vazio.** Se a transcrição termina sem nenhum segmento e sem texto, o job vira
+**erro** com uma mensagem acionável ("tente um modelo menor"), em vez de "Concluído" sem nada para
+baixar. Esse era exatamente o sintoma de um arquivo de 7,8 h com o modelo `medium`.
+
 **Re-transcrever.** Um job concluído guarda o `audio.mp3`, então dá para rodar a transcrição de
 novo trocando idioma ou modelo sem baixar nem converter nada — só a etapa cara é refeita, e ela
 ocupa a barra inteira. O resultado é substituído **no mesmo job** (segmentos e texto são zerados
@@ -283,6 +294,9 @@ downloads/<job-id>/
 - **Apple Silicon apenas.** O `mlx-whisper` depende do MLX. Em Intel ou Linux, trocar por
   `faster-whisper` — só a função `stepTranscribe` muda.
 - **O pipeline local não roda em serverless.** Depende de processos externos e disco. Publicado, o app cai no modo nuvem — sem link de página do YouTube/Instagram e com upload limitado a 4 MB.
+- **Modelo grande + áudio longo ainda pode faltar memória.** O fatiamento resolve o caso comum,
+  mas com 8 GB o `large-v3-turbo` em arquivos de várias horas continua arriscado. Se falhar, o app
+  agora avisa e sugere `small` ou `tiny`.
 - **Um job por vez, na prática.** Nada impede disparar vários, mas eles disputam a mesma GPU.
 - **Instagram muda as proteções com frequência.** Posts e reels públicos funcionam sem login;
   se um dia parar, o conserto quase sempre é `uv tool upgrade yt-dlp`. Conteúdo privado e
@@ -329,6 +343,16 @@ corrigir idioma ou trocar de modelo sem repetir download e conversão. Como o jo
 `transcribing`, o `EventSource` reabre sozinho e o progresso aparece sem nenhuma mudança na
 lógica de SSE. Validado ponta a ponta: job em `pt`/`large-v3-turbo` re-transcrito em
 `en`/`small`, com o texto substituído corretamente.
+
+**2026-08-24 — fatiamento de áudio longo e fim do "Concluído" vazio.** Um upload de 7,8 h
+(`lab01.mp4`, MP3 de 214 MB, modelo `medium`) rodou 48 min, terminou marcado como **Concluído** e
+não gerou transcrição nenhuma: zero segmentos, nenhum arquivo, nada para baixar. Diagnóstico: o
+arquivo estava íntegro (60 s dele transcrevem normalmente) — o problema era escala, com o
+mlx_whisper morrendo por memória e saindo com código 0. Duas correções: (1) `stepTranscribe` agora
+fatia o áudio acima de 30 min e costura os segmentos com deslocamento de tempo; (2) resultado vazio
+vira erro com mensagem acionável, nunca mais "Concluído" sem texto. Nessa sessão também foram
+removidas 39 pastas duplicadas com sufixo `" 2"` dentro de `node_modules`, criadas por conflito de
+sincronização, que quebravam o type-check com `TS2688: Cannot find type definition file`.
 
 ## Aviso
 
