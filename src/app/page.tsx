@@ -143,6 +143,24 @@ export default function Home() {
     }
   }
 
+  // Re-transcreve reaproveitando o MP3 em disco. O job volta em 'transcribing',
+  // então o efeito de SSE reabre o EventSource sozinho e o card mostra progresso.
+  async function handleRetranscribe(id: string, patch: Partial<JobOptions>) {
+    setError(null)
+    try {
+      const res = await fetch(`/api/jobs/${id}/retranscribe`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ options: patch }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? 'Não foi possível re-transcrever.')
+      upsert(data.job as Job)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err))
+    }
+  }
+
   async function handleDelete(id: string) {
     sources.current.get(id)?.close()
     sources.current.delete(id)
@@ -373,7 +391,14 @@ export default function Home() {
         {jobs.length === 0 ? (
           <p className="py-10 text-center text-sm text-zinc-600">Nenhuma transcrição ainda.</p>
         ) : (
-          jobs.map((job) => <JobCard key={job.id} job={job} onDelete={handleDelete} />)
+          jobs.map((job) => (
+            <JobCard
+              key={job.id}
+              job={job}
+              onDelete={handleDelete}
+              onRetranscribe={isCloud ? undefined : handleRetranscribe}
+            />
+          ))
         )}
       </section>
     </main>

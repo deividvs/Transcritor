@@ -88,6 +88,14 @@ downloads/<job-id>/
 - **`/api/jobs/[id]/events`** — SSE. O cliente abre um `EventSource` por job em andamento e o
   servidor fecha o stream sozinho quando o job termina.
 
+## Re-transcrever
+
+Todo job concluído guarda o MP3. No card dele há **↻ re-transcrever**: escolhe outro idioma ou
+outro modelo e roda de novo direto do MP3 — sem baixar nem converter outra vez. Útil quando o
+idioma saiu errado ou você quer comparar modelos. O texto anterior é substituído.
+
+Só no modo local: na nuvem não há arquivo em disco para reaproveitar.
+
 ## Dois modos
 
 O modo é escolhido sozinho, pela presença dos binários — não há configuração.

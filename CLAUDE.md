@@ -126,6 +126,12 @@ antes de gravar qualquer byte — não é limite técnico. Arquivo enviado pula 
 `runPipelineFromFile()` vai direto para conversão e transcrição, e por isso os pesos da barra são
 outros (`FILE_SPAN`: conversão 0–15%, transcrição 15–100%).
 
+**Re-transcrever.** Um job concluído guarda o `audio.mp3`, então dá para rodar a transcrição de
+novo trocando idioma ou modelo sem baixar nem converter nada — só a etapa cara é refeita, e ela
+ocupa a barra inteira. O resultado é substituído **no mesmo job** (segmentos e texto são zerados
+antes de começar), o que mantém o uso de disco constante. Só existe no modo local: na nuvem não há
+MP3 em disco para reaproveitar.
+
 **Limite de 4 MB no upload da nuvem.** É a restrição de corpo de request das funções da Vercel (4,5 MB),
 não da Groq (que aceita 25 MB no free). Por link direto não há esse limite, porque o arquivo
 nunca passa pela nossa função — a Groq busca sozinha.
@@ -147,6 +153,7 @@ nunca passa pela nossa função — a Groq busca sozinha.
 | `src/app/api/jobs/[id]/route.ts` | `GET` um job, `DELETE` remove job + pasta. |
 | `src/app/api/jobs/[id]/events/route.ts` | **SSE** — stream de progresso. |
 | `src/app/api/jobs/[id]/file/route.ts` | Download dos artefatos com nome amigável. |
+| `src/app/api/jobs/[id]/retranscribe/route.ts` | Re-transcreve o job reaproveitando o `audio.mp3` em disco. |
 | `src/app/page.tsx` | Formulário, opções e lista de jobs. Um `EventSource` por job em andamento. |
 | `src/components/job-card.tsx` | Card com thumbnail, barra, downloads e transcrição. |
 
@@ -315,6 +322,13 @@ ponta a ponta com um MP4: duração sondada, MP3 gerado, transcrição correta e
 artefatos em disco. Nessa sessão também apareceu — e foi resolvido — um problema de ambiente: vários
 arquivos do `node_modules` liam como 0 byte apesar do metadado correto, o que fazia `next dev` e
 `next build` saírem com código 0 sem imprimir nada; `npm ci` resolveu.
+
+**2026-08-24 — re-transcrever job existente.** Adicionada a rota
+`/api/jobs/[id]/retranscribe` e o controle no card. Reaproveita o `audio.mp3` já em disco para
+corrigir idioma ou trocar de modelo sem repetir download e conversão. Como o job volta para
+`transcribing`, o `EventSource` reabre sozinho e o progresso aparece sem nenhuma mudança na
+lógica de SSE. Validado ponta a ponta: job em `pt`/`large-v3-turbo` re-transcrito em
+`en`/`small`, com o texto substituído corretamente.
 
 ## Aviso
 

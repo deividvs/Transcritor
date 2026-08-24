@@ -4,7 +4,7 @@ import { useState } from 'react'
 
 import { formatDuration, formatRelative, formatTimestamp } from '@/lib/format'
 import { buildFile, slug } from '@/lib/subtitles'
-import { STAGE_LABEL, type Job } from '@/lib/types'
+import { LANGUAGES, MODELS, STAGE_LABEL, type Job, type JobOptions } from '@/lib/types'
 
 const DOWNLOADS = [
   { kind: 'mp3', label: 'MP3' },
@@ -15,17 +15,34 @@ const DOWNLOADS = [
   { kind: 'video', label: 'Vídeo' },
 ]
 
+const SELECT =
+  'w-full rounded-md border border-white/10 bg-black/30 px-2 py-1.5 text-xs text-zinc-200 outline-none focus:border-sky-500/50'
+
 function barColor(job: Job) {
   if (job.stage === 'error') return 'bg-red-500'
   if (job.stage === 'done') return 'bg-emerald-500'
   return 'bg-sky-500'
 }
 
-export default function JobCard({ job, onDelete }: { job: Job; onDelete: (id: string) => void }) {
+export default function JobCard({
+  job,
+  onDelete,
+  onRetranscribe,
+}: {
+  job: Job
+  onDelete: (id: string) => void
+  onRetranscribe?: (id: string, options: Partial<JobOptions>) => Promise<void>
+}) {
   const [withTimes, setWithTimes] = useState(true)
   const [copied, setCopied] = useState(false)
+  const [redoing, setRedoing] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [language, setLanguage] = useState(job.options.language)
+  const [model, setModel] = useState(job.options.model)
 
   const running = job.stage !== 'done' && job.stage !== 'error'
+  // Só faz sentido com o MP3 ainda em disco, ou seja, no modo local.
+  const canRedo = Boolean(onRetranscribe) && !running && Boolean(job.files.mp3)
 
   // Modo local: os arquivos existem em disco e vêm da API. Modo nuvem: não há
   // disco, então txt/srt/vtt/json são montados aqui a partir dos segmentos.
@@ -112,6 +129,68 @@ export default function JobCard({ job, onDelete }: { job: Job; onDelete: (id: st
             <p className="mt-3 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-sm text-red-300">
               {job.error}
             </p>
+          ) : null}
+
+          {canRedo ? (
+            <div className="mt-3">
+              {redoing ? (
+                <div className="rounded-lg border border-white/10 bg-black/20 p-3">
+                  <p className="mb-2 text-xs text-zinc-500">
+                    Reaproveita o MP3 que já está em disco — não baixa nem converte de novo.
+                  </p>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <select
+                      value={language}
+                      onChange={(e) => setLanguage(e.target.value)}
+                      className={SELECT}
+                    >
+                      {LANGUAGES.map((l) => (
+                        <option key={l.value} value={l.value}>
+                          {l.label}
+                        </option>
+                      ))}
+                    </select>
+                    <select value={model} onChange={(e) => setModel(e.target.value)} className={SELECT}>
+                      {MODELS.map((m) => (
+                        <option key={m.value} value={m.value}>
+                          {m.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div className="mt-2 flex gap-2">
+                    <button
+                      disabled={busy}
+                      onClick={async () => {
+                        setBusy(true)
+                        try {
+                          await onRetranscribe!(job.id, { language, model })
+                          setRedoing(false)
+                        } finally {
+                          setBusy(false)
+                        }
+                      }}
+                      className="rounded-md bg-sky-600 px-3 py-1.5 text-xs font-medium text-white transition hover:bg-sky-500 disabled:opacity-40"
+                    >
+                      {busy ? 'Enviando…' : 'Re-transcrever'}
+                    </button>
+                    <button
+                      onClick={() => setRedoing(false)}
+                      className="rounded-md px-3 py-1.5 text-xs text-zinc-400 transition hover:bg-white/5"
+                    >
+                      cancelar
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setRedoing(true)}
+                  className="rounded-md border border-white/10 bg-white/5 px-2.5 py-1 text-xs text-zinc-300 transition hover:border-sky-500/40 hover:text-sky-300"
+                >
+                  ↻ re-transcrever
+                </button>
+              )}
+            </div>
           ) : null}
 
           {onDisk.length > 0 || generated.length > 0 ? (

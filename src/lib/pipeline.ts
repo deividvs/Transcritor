@@ -371,3 +371,21 @@ export async function runPipelineFromFile(job: Job, media: string) {
     }, true)
   }
 }
+
+/**
+ * Re-transcreve um job concluído reaproveitando o `audio.mp3` que já está em
+ * disco. Serve para corrigir o idioma ou trocar o modelo sem baixar nem
+ * converter de novo — a etapa cara é só a transcrição, que ocupa a barra toda.
+ */
+export async function runRetranscribe(job: Job, mp3: string) {
+  try {
+    await stepTranscribe(job, mp3, { convert: [0, 0], transcribe: [0, 100] })
+    updateJob(job.id, { stage: 'done', progress: 100, message: 'Concluído' }, true)
+  } catch (error) {
+    updateJob(job.id, {
+      stage: 'error',
+      message: 'Falhou',
+      error: error instanceof Error ? error.message : String(error),
+    }, true)
+  }
+}
