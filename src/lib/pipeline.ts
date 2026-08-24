@@ -54,6 +54,14 @@ const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n))
 /** Pesos de cada etapa na barra de progresso global. */
 const SPAN = { metadata: [0, 5], download: [5, 40], convert: [40, 50], transcribe: [50, 100] }
 
+/**
+ * Arquivo enviado pelo usuário já chega em disco: não há metadata nem download,
+ * então a conversão e a transcrição se esticam para ocupar a barra inteira.
+ */
+const FILE_SPAN = { convert: [0, 15], transcribe: [15, 100] }
+
+type Spans = { convert: number[]; transcribe: number[] }
+
 function scale(span: number[], pct: number) {
   return clamp(span[0] + (pct / 100) * (span[1] - span[0]))
 }
@@ -178,7 +186,7 @@ async function stepDownload(job: Job) {
   return downloaded
 }
 
-async function stepConvert(job: Job, input: string) {
+async function stepConvert(job: Job, input: string, spans: Spans = SPAN) {
   const ffmpeg = requireBin('ffmpeg')
   const output = path.join(jobDir(job.id), 'audio.mp3')
   const total = job.duration ?? 0
@@ -190,7 +198,7 @@ async function stepConvert(job: Job, input: string) {
 
   updateJob(job.id, {
     stage: 'converting',
-    progress: SPAN.convert[0],
+    progress: spans.convert[0],
     message: 'Convertendo para MP3…',
   }, true)
 
@@ -209,7 +217,7 @@ async function stepConvert(job: Job, input: string) {
         if (!match || total <= 0) return
         const pct = clamp((Number(match[1]) / 1e6 / total) * 100)
         updateJob(job.id, {
-          progress: scale(SPAN.convert, pct),
+          progress: scale(spans.convert, pct),
           message: `Convertendo para MP3… ${pct.toFixed(0)}%`,
         })
       },
@@ -219,14 +227,14 @@ async function stepConvert(job: Job, input: string) {
   if (code !== 0) throw new Error('O ffmpeg falhou ao converter o áudio para MP3.')
 
   updateJob(job.id, {
-    progress: SPAN.convert[1],
+    progress: spans.convert[1],
     files: { ...job.files, mp3: 'audio.mp3' },
   }, true)
 
   return output
 }
 
-async function stepTranscribe(job: Job, mp3: string) {
+async function stepTranscribe(job: Job, mp3: string, spans: Spans = SPAN) {
   const whisper = requireBin('whisper')
   const dir = jobDir(job.id)
   const total = job.duration ?? 0
@@ -234,7 +242,7 @@ async function stepTranscribe(job: Job, mp3: string) {
 
   updateJob(job.id, {
     stage: 'transcribing',
-    progress: SPAN.transcribe[0],
+    progress: spans.transcribe[0],
     message: 'Carregando o modelo Whisper…',
   }, true)
 
@@ -278,7 +286,7 @@ async function stepTranscribe(job: Job, mp3: string) {
       updateJob(job.id, {
         segments: [...segments],
         transcript: segments.map((s) => s.text).join(' '),
-        progress: scale(SPAN.transcribe, pct),
+        progress: scale(spans.transcribe, pct),
         message: `Transcrevendo… ${pct.toFixed(0)}%`,
       })
     },
@@ -321,6 +329,38 @@ export async function runPipeline(job: Job) {
     }
 
     await stepTranscribe(job, mp3)
+
+    updateJob(job.id, { stage: 'done', progress: 100, message: 'Concluído' }, true)
+  } catch (error) {
+    updateJob(job.id, {
+      stage: 'error',
+      message: 'Falhou',
+      error: error instanceof Error ? error.message : String(error),
+    }, true)
+  }
+}
+
+/**
+ * Variante para arquivo enviado pelo usuário: a mídia já está em disco, então
+ * pulamos metadata e download e vamos direto para conversão e transcrição.
+ */
+export async function runPipelineFromFile(job: Job, media: string) {
+  try {
+    if (!job.duration) {
+      const probed = await probeDuration(media)
+      if (probed) updateJob(job.id, { duration: probed }, true)
+    }
+
+    const mp3 = await stepConvert(job, media, FILE_SPAN)
+
+    // O original só fica se o usuário pediu para guardar o vídeo; senão vira
+    // cópia duplicada do que ele já tem na máquina. Quem registra `files.video`
+    // é a rota de upload, e só quando keepVideo está ligado.
+    if (!job.options.keepVideo) {
+      try { fs.rmSync(media, { force: true }) } catch { /* ignore */ }
+    }
+
+    await stepTranscribe(job, mp3, FILE_SPAN)
 
     updateJob(job.id, { stage: 'done', progress: 100, message: 'Concluído' }, true)
   } catch (error) {

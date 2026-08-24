@@ -39,4 +39,23 @@ export function currentMode(): Mode {
 export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
 /** Extensões que a Groq aceita. */
-export const ACCEPTED_UPLOAD = '.mp3,.mp4,.m4a,.wav,.webm,.ogg,.flac,.mpeg,.mpga'
+export const ACCEPTED_CLOUD_UPLOAD = '.mp3,.mp4,.m4a,.wav,.webm,.ogg,.flac,.mpeg,.mpga'
+
+/**
+ * No modo local quem abre o arquivo é o ffmpeg, então praticamente qualquer
+ * container serve — inclusive os de vídeo que a Groq não aceita.
+ */
+export const ACCEPTED_LOCAL_UPLOAD =
+  '.mp3,.mp4,.m4a,.wav,.webm,.ogg,.flac,.mpeg,.mpga,.mov,.mkv,.avi,.wmv,.flv,.aac,.opus,.aiff,.3gp,.ts'
+
+/**
+ * Teto do modo local. O arquivo é gravado por streaming, então o limite existe
+ * só para evitar encher o disco por engano — não é restrição técnica.
+ */
+export const MAX_LOCAL_UPLOAD_BYTES = 5000 * 1024 * 1024
+
+export function uploadLimits(mode: Mode) {
+  return mode === 'cloud'
+    ? { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPTED_CLOUD_UPLOAD }
+    : { maxBytes: MAX_LOCAL_UPLOAD_BYTES, accept: ACCEPTED_LOCAL_UPLOAD }
+}

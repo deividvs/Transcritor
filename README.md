@@ -95,7 +95,7 @@ O modo é escolhido sozinho, pela presença dos binários — não há configura
 | | **local** | **nuvem** |
 |---|---|---|
 | Transcrição | `mlx_whisper` (GPU Metal) | API da Groq — `whisper-large-v3-turbo` |
-| Entrada | link do YouTube / Instagram | arquivo até 4 MB, ou link direto de mídia |
+| Entrada | arquivo do computador (até 5.000 MB) ou link do YouTube / Instagram | arquivo até 4 MB, ou link direto de mídia |
 | Custo | zero | ~US$ 0,04 por hora de áudio |
 | Privacidade | nada sai da máquina | o áudio vai para a Groq |
 

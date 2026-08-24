@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { BIN, INSTALL_HINT, missingBins } from '@/lib/bin'
-import { ACCEPTED_UPLOAD, MAX_UPLOAD_BYTES, cloudKey, currentMode } from '@/lib/mode'
+import { cloudKey, currentMode, uploadLimits } from '@/lib/mode'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -17,6 +17,7 @@ export async function GET() {
     hasCloudKey: hasKey,
     bins: BIN,
     missing: missing.map((key) => ({ key, hint: INSTALL_HINT[key] })),
-    upload: { maxBytes: MAX_UPLOAD_BYTES, accept: ACCEPTED_UPLOAD },
+    // maxBytes 0 = sem teto (local grava por streaming).
+    upload: uploadLimits(mode),
   })
 }

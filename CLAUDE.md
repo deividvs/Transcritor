@@ -102,7 +102,7 @@ local. Em serverless (`process.env.VERCEL`) é sempre nuvem.
 |---|---|---|
 | Onde roda | sua máquina | Vercel (serverless) |
 | Transcrição | `mlx_whisper` na GPU Metal | API da Groq (`whisper-large-v3-turbo`) |
-| Entrada | link do YouTube / Instagram | arquivo enviado (≤ 4 MB) ou **link direto** de mídia |
+| Entrada | **arquivo do computador (≤ 5.000 MB)** ou link do YouTube / Instagram | arquivo enviado (≤ 4 MB) ou **link direto** de mídia |
 | Custo | zero | ~US$ 0,04 por hora de áudio |
 | Privacidade | nada sai da máquina | o áudio vai para a Groq |
 | Progresso | SSE, etapa a etapa | síncrono — o job volta pronto |
@@ -118,7 +118,15 @@ responde, então o padrão fire-and-forget + SSE do modo local não é confiáve
 dentro do próprio request e devolve o job já em `done`. Como `done` é terminal, a UI não abre
 `EventSource` — a mesma tela serve aos dois modos sem ramificação.
 
-**Limite de 4 MB no upload.** É a restrição de corpo de request das funções da Vercel (4,5 MB),
+**Upload de arquivo local.** O corpo do request vai **cru**, não como multipart: o nome do
+arquivo e as opções viajam na query string. Isso permite gravar em disco por streaming
+(`Readable.fromWeb` → `createWriteStream`), então um vídeo de gigabytes nunca fica inteiro na
+memória. O teto de 5.000 MB é só uma trava contra encher o disco, checada pelo `Content-Length`
+antes de gravar qualquer byte — não é limite técnico. Arquivo enviado pula metadata e download:
+`runPipelineFromFile()` vai direto para conversão e transcrição, e por isso os pesos da barra são
+outros (`FILE_SPAN`: conversão 0–15%, transcrição 15–100%).
+
+**Limite de 4 MB no upload da nuvem.** É a restrição de corpo de request das funções da Vercel (4,5 MB),
 não da Groq (que aceita 25 MB no free). Por link direto não há esse limite, porque o arquivo
 nunca passa pela nossa função — a Groq busca sozinha.
 
@@ -129,7 +137,7 @@ nunca passa pela nossa função — a Groq busca sozinha.
 | `src/lib/bin.ts` | Resolve `yt-dlp`, `ffmpeg` e `mlx_whisper` no disco e injeta um PATH completo nos processos filhos. |
 | `src/lib/types.ts` | Tipos compartilhados servidor/cliente. Sem `node:*`, para poder ser importado do componente client. |
 | `src/lib/jobs.ts` | Store de jobs em memória + espelho em disco (`job.json`). Um `EventEmitter` por job. |
-| `src/lib/pipeline.ts` | As 4 etapas: metadata → download → convert → transcribe. |
+| `src/lib/pipeline.ts` | As 4 etapas: metadata → download → convert → transcribe. `runPipelineFromFile()` entra direto na conversão, para arquivo enviado. |
 | `src/lib/format.ts` | Formatação de duração, timestamp e tempo relativo. |
 | `src/lib/mode.ts` | Decide local vs nuvem, expõe o limite de upload e trava a escrita em disco no serverless. |
 | `src/lib/cloud.ts` | Chamada à API da Groq (`file` ou `url`) e tradução dos erros dela. |
@@ -298,6 +306,15 @@ navegador). Corrigido também um aviso do Turbopack: a busca de binários em `bi
 "dynamic filesystem access" e fazia o tracer empacotar o projeto inteiro — resolvido com
 `/* turbopackIgnore: true */`, já que os caminhos ficam fora do projeto. Repositório próprio criado
 e publicado em github.com/deividvs/Transcritor.
+
+**2026-08-24 — upload de arquivo local.** Antes só dava para colar link; agora dá para transcrever
+vídeo/áudio que já está na máquina, sem limite prático de tamanho (teto de 5.000 MB) e nas duas
+pontas: o modo local grava por streaming e roda o pipeline normal, o modo nuvem manda o arquivo
+para a Groq. O corpo vai cru em vez de multipart justamente para permitir o streaming. Validado
+ponta a ponta com um MP4: duração sondada, MP3 gerado, transcrição correta em português e os 6
+artefatos em disco. Nessa sessão também apareceu — e foi resolvido — um problema de ambiente: vários
+arquivos do `node_modules` liam como 0 byte apesar do metadado correto, o que fazia `next dev` e
+`next build` saírem com código 0 sem imprimir nada; `npm ci` resolveu.
 
 ## Aviso
 

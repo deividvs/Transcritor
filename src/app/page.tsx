@@ -115,8 +115,14 @@ export default function Home() {
     setSubmitting(true)
     try {
       // Arquivo tem precedência: se o usuário escolheu um, é o que vale.
+      // Vai no corpo cru (não multipart) para o servidor gravar por streaming.
       const res = file
-        ? await fetch('/api/jobs', { method: 'POST', body: formBody(file, options) })
+        ? await fetch(
+            `/api/jobs?filename=${encodeURIComponent(file.name)}&options=${encodeURIComponent(
+              JSON.stringify(options),
+            )}`,
+            { method: 'POST', body: file },
+          )
         : await fetch('/api/jobs', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -147,6 +153,8 @@ export default function Home() {
   const set = <K extends keyof JobOptions>(key: K, value: JobOptions[K]) =>
     setOptions((prev) => ({ ...prev, [key]: value }))
 
+  // maxBytes 0 significa sem teto: no local o arquivo é gravado por streaming.
+  const hasLimit = Boolean(health && health.upload.maxBytes > 0)
   const maxMb = health ? Math.round(health.upload.maxBytes / 1024 / 1024) : 4
   const canSubmit = Boolean(file) || url.trim().length > 0
 
@@ -167,8 +175,9 @@ export default function Home() {
             </>
           ) : (
             <>
-              Cole o link de um vídeo do YouTube ou Instagram. Baixa o áudio, converte para MP3 e
-              transcreve — tudo localmente, sem enviar nada para a nuvem.
+              Envie um vídeo ou áudio do seu computador (até {maxMb.toLocaleString('pt-BR')} MB), ou
+              cole o link de um vídeo do YouTube ou Instagram. Converte para MP3 e transcreve — tudo
+              localmente, sem enviar nada para a nuvem.
             </>
           )}
         </p>
@@ -208,8 +217,7 @@ export default function Home() {
       ) : null}
 
       <form onSubmit={handleSubmit} className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
-        {isCloud ? (
-          <div className="mb-2">
+        <div className="mb-2">
             <input
               ref={fileInput}
               type="file"
@@ -224,15 +232,16 @@ export default function Home() {
             {file ? (
               <p className="mt-1.5 text-xs text-zinc-500">
                 {file.name} · {(file.size / 1024 / 1024).toFixed(1)} MB
-                {file.size > (health?.upload.maxBytes ?? 0) ? (
+                {hasLimit && file.size > health!.upload.maxBytes ? (
                   <span className="text-amber-400"> — acima do limite de {maxMb} MB</span>
                 ) : null}
               </p>
             ) : (
-              <p className="mt-1.5 text-center text-xs text-zinc-600">ou use um link direto abaixo</p>
+              <p className="mt-1.5 text-center text-xs text-zinc-600">
+                {isCloud ? 'ou use um link direto abaixo' : 'ou cole um link abaixo'}
+              </p>
             )}
-          </div>
-        ) : null}
+        </div>
 
         <div className="flex flex-col gap-2 sm:flex-row">
           <input
@@ -369,11 +378,4 @@ export default function Home() {
       </section>
     </main>
   )
-}
-
-function formBody(file: File, options: JobOptions) {
-  const form = new FormData()
-  form.append('file', file)
-  form.append('options', JSON.stringify(options))
-  return form
 }
